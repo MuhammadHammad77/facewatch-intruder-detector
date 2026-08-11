@@ -1,0 +1,287 @@
+"""
+/api/stream — Video Feed & File Processing
+
+Routes:
+  GET  /api/stream/feed/{source}     — MJPEG stream for live camera/RTSP
+  POST /api/stream/upload            — Process an uploaded MP4 video file
+  GET  /api/stream/sources           — List available camera sources
+
+The MJPEG approach: Each frame is sent as a multipart JPEG over one HTTP
+connection. The React frontend renders it with a simple <img src="..."> tag.
+No WebSockets needed for the video feed itself (WebSockets are used for alerts).
+"""
+
+import asyncio
+import base64
+import io
+import os
+import time
+import uuid
+import tempfile
+from typing import AsyncGenerator
+
+import cv2
+import numpy as np
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
+
+from db.supabase_client import insert_alert
+from services.recognition import recognize_faces_in_frame, draw_annotations, save_snapshot
+from services.alert_broadcaster import broadcast_alert
+
+router = APIRouter()
+
+# ── Cooldown: only fire an alert once every N seconds per camera source ────
+ALERT_COOLDOWN_SECONDS = 10
+_last_alert_time: dict[str, float] = {}   # source_key → last alert timestamp
+
+
+# ─── Core: Process one frame ────────────────────────────────────────────────
+
+def _process_frame(frame_bgr: np.ndarray, source_key: str) -> np.ndarray:
+    """
+    1. Detect and classify all faces in the frame.
+    2. Annotate the frame (green/red boxes).
+    3. If any UNKNOWN face found and cooldown passed → save snapshot + fire alert.
+
+    Returns the annotated frame.
+    """
+    face_results = recognize_faces_in_frame(frame_bgr)
+    annotated = draw_annotations(frame_bgr.copy(), face_results)
+
+    # Check for unknowns
+    unknowns = [f for f in face_results if not f["is_known"]]
+    if unknowns:
+        now = time.time()
+        last = _last_alert_time.get(source_key, 0)
+        if now - last >= ALERT_COOLDOWN_SECONDS:
+            _last_alert_time[source_key] = now
+            snapshot_url = save_snapshot(annotated, source_key)
+            confidence = unknowns[0]["confidence"]
+
+            # Fire-and-forget: insert alert to DB and broadcast to WebSocket clients
+            asyncio.create_task(_fire_alert(snapshot_url, source_key, confidence))
+
+    return annotated
+
+
+async def _fire_alert(snapshot_url: str, source_key: str, confidence: float):
+    """Async: Insert alert to DB and broadcast via WebSocket."""
+    loop = asyncio.get_event_loop()
+    alert = await loop.run_in_executor(
+        None, insert_alert, snapshot_url, source_key, confidence
+    )
+    await broadcast_alert({
+        "type": "unknown_detected",
+        "alert_id": alert["id"],
+        "snapshot_url": snapshot_url,
+        "camera_source": source_key,
+        "confidence": confidence,
+        "detected_at": alert["detected_at"],
+    })
+
+
+# ─── Frame Generator: Webcam / RTSP ─────────────────────────────────────────
+
+async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
+    """
+    Async generator that captures frames from a camera/RTSP source
+    and yields them as multipart JPEG chunks (MJPEG protocol).
+    """
+    cap = cv2.VideoCapture(source)
+
+    if not cap.isOpened():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Cannot open video source: {source}",
+        )
+
+    source_key = str(source)
+    frame_idx = 0
+    
+    last_results_container = {"results": []}
+    is_processing = {"status": False}
+    failed_reads = 0
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                failed_reads += 1
+                if failed_reads > 50:
+                    # Too many failures, yield a blank black frame with text
+                    blank = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(blank, "Stream Offline / Reconnecting...", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    _, jpeg_buf = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg_buf.tobytes() + b"\r\n")
+                    await asyncio.sleep(2)
+                    cap.release()
+                    cap = cv2.VideoCapture(source)
+                    failed_reads = 0
+                else:
+                    await asyncio.sleep(0.1)
+                continue
+            
+            failed_reads = 0
+            frame_idx += 1
+
+            # Run AI without blocking the camera read loop
+            if frame_idx % 5 == 1 and not is_processing["status"]:
+                is_processing["status"] = True
+                loop = asyncio.get_event_loop()
+                
+                def _background_ai(f):
+                    try:
+                        res = recognize_faces_in_frame(f)
+                        last_results_container["results"] = res
+                    except Exception as e:
+                        print(f"Error in background AI: {e}")
+                    finally:
+                        is_processing["status"] = False
+
+                loop.run_in_executor(None, _background_ai, frame.copy())
+
+            # Check unknowns and alert in the main thread (async safe)
+            current_results = last_results_container["results"]
+            unknowns = [f for f in current_results if not f["is_known"]]
+            if unknowns:
+                now = time.time()
+                last = _last_alert_time.get(source_key, 0)
+                if now - last >= ALERT_COOLDOWN_SECONDS:
+                    _last_alert_time[source_key] = now
+                    # We can use the current frame to capture the snapshot
+                    annotated_snap = draw_annotations(frame.copy(), current_results)
+                    snapshot_url = save_snapshot(annotated_snap, source_key)
+                    confidence = unknowns[0]["confidence"]
+                    asyncio.create_task(_fire_alert(snapshot_url, source_key, confidence))
+
+            # Draw the cached boxes on the current fast frame
+            annotated = draw_annotations(frame.copy(), current_results)
+
+            # Encode frame to JPEG
+            _, jpeg_buf = cv2.imencode(
+                ".jpg", annotated,
+                [cv2.IMWRITE_JPEG_QUALITY, 70]
+            )
+
+            # Yield MJPEG part
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + jpeg_buf.tobytes()
+                + b"\r\n"
+            )
+
+            # Prevent CPU hogging (0.02s sleep = ~50 FPS max)
+            await asyncio.sleep(0.02)
+
+    finally:
+        cap.release()
+
+
+# ─── GET /api/stream/feed/{source} ──────────────────────────────────────────
+
+@router.get("/feed/{source:path}")
+async def live_feed(source: str):
+    """
+    MJPEG stream endpoint.
+    Usage in React: <img src="http://localhost:8000/api/stream/feed/0" />
+    
+    source examples:
+      - "0"           → default webcam
+      - "rtsp://..."  → CCTV camera (URL-encode the RTSP URL before passing)
+    """
+    # Parse source: "0" → int (webcam index), else string (RTSP URL)
+    video_source: str | int = int(source) if source.isdigit() else source
+
+    return StreamingResponse(
+        _mjpeg_generator(video_source),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+# ─── POST /api/stream/upload ─────────────────────────────────────────────────
+
+@router.post("/upload")
+async def process_uploaded_video(
+    file: UploadFile = File(..., description="MP4 video file"),
+):
+    """
+    Upload an MP4 file for offline face recognition.
+    Processes every 5th frame (skip frames for speed).
+    Returns a summary of detections.
+    """
+    if not file.filename.lower().endswith((".mp4", ".avi", ".mkv", ".mov")):
+        raise HTTPException(status_code=415, detail="Only MP4/AVI/MKV/MOV files accepted.")
+
+    # Save uploaded file to temp location
+    temp_dir = tempfile.gettempdir()
+    ext = os.path.splitext(file.filename)[1] if file.filename else ".mp4"
+    temp_path = os.path.join(temp_dir, f"upload_{uuid.uuid4().hex}{ext}")
+    try:
+        content = await file.read()
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        # Process video
+        cap = cv2.VideoCapture(temp_path)
+        if not cap.isOpened():
+            raise HTTPException(status_code=422, detail="Cannot open video file.")
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25
+        frame_idx = 0
+        detections = []
+        source_key = f"upload:{file.filename}"
+
+        fps_int = int(fps) if fps > 0 else 25
+        frame_idx = 0
+        processed_count = 0
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            processed_count += 1
+
+            # Process 1 frame per second for fast offline analysis
+            loop = asyncio.get_event_loop()
+            face_results = await loop.run_in_executor(
+                None, recognize_faces_in_frame, frame
+            )
+            unknowns = [f for f in face_results if not f["is_known"]]
+            if unknowns:
+                annotated = draw_annotations(frame.copy(), face_results)
+                snapshot_url = save_snapshot(annotated, source_key)
+                alert = await loop.run_in_executor(
+                    None, insert_alert, snapshot_url, source_key, unknowns[0]["confidence"]
+                )
+                detections.append({
+                    "frame": frame_idx,
+                    "timestamp_sec": round(frame_idx / fps, 2),
+                    "snapshot_url": snapshot_url,
+                    "unknown_count": len(unknowns),
+                    "known_faces": [f["name"] for f in face_results if f["is_known"]],
+                })
+                
+            # Skip frames using grab() which is much faster than set(POS_FRAMES)
+            skip_frames = fps_int - 1
+            for _ in range(skip_frames):
+                if not cap.grab():
+                    break
+                frame_idx += 1
+            frame_idx += 1
+
+        cap.release()
+        return {
+            "filename": file.filename,
+            "total_frames": total_frames,
+            "processed_frames": processed_count,
+            "unknown_detections": len(detections),
+            "detections": detections,
+        }
+
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)

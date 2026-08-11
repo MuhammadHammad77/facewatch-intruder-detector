@@ -1,0 +1,27 @@
+# FaceWatch Backend Dependencies
+# Install: pip install -r requirements.txt
+#
+# Note: face_recognition requires dlib which requires cmake + C++ build tools:
+#   Linux:  sudo apt-get install cmake build-essential
+#   Mac:    brew install cmake
+#   Windows: Install Visual Studio Build Tools, then: pip install dlib face_recognition
+
+# ── Web Framework ───────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9        # For UploadFile (file uploads)
+
+# ── Face Recognition ────────────────────────────────────────────────────────
+face_recognition==1.3.0        # Wrapper around dlib 128D encodings
+dlib                  # Underlying ML library (compiled C++)
+opencv-python==4.10.0.82       # Video capture + image processing
+numpy==1.26.4                  # Array math (face distance comparisons)
+Pillow==10.3.0                 # Image format handling
+
+# ── Database ────────────────────────────────────────────────────────────────
+supabase==2.4.6                # Supabase Python client
+
+# ── Utilities ───────────────────────────────────────────────────────────────
+python-dotenv==1.0.1           # Load .env variables
+httpx==0.27.0                  # Async HTTP client
+pydantic==2.7.1                # Data validation (FastAPI models)
