@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { useStore } from '../store/useStore';
@@ -10,6 +10,19 @@ export default function Monitor() {
   const { liveAlerts, selectedCameraSource, setSelectedSource, unreviewedCount, setSelectedAlertModal } = useStore();
   const [customSource, setCustomSource] = useState('');
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    // Fetch initial alert history
+    if (liveAlerts.length === 0) {
+      axios.get(`${API_URL}/api/alerts`)
+        .then(res => {
+          useStore.getState().setLiveAlerts(res.data);
+          const unreviewed = res.data.filter((a: any) => !a.is_reviewed).length;
+          useStore.getState().setUnreviewedCount(unreviewed);
+        })
+        .catch(err => console.error("Failed to fetch alert history", err));
+    }
+  }, []);
 
   const handleCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault();

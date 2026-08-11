@@ -73,22 +73,59 @@ async def _fire_alert(snapshot_url: str, source_key: str, confidence: float):
     )
     await broadcast_alert({
         "type": "unknown_detected",
-        "alert_id": alert["id"],
-        "snapshot_url": snapshot_url,
-        "camera_source": source_key,
-        "confidence": confidence,
-        "detected_at": alert["detected_at"],
+        "alert": alert,
     })
 
 
-# ─── Frame Generator: Webcam / RTSP ─────────────────────────────────────────
+import threading
+
+class CameraReader:
+    def __init__(self, source):
+        self.cap = cv2.VideoCapture(source)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.frame = None
+        self.ret = False
+        self.running = True
+        self.lock = threading.Lock()
+        
+        if self.cap.isOpened():
+            self.thread = threading.Thread(target=self._update, daemon=True)
+            self.thread.start()
+
+    def _update(self):
+        while self.running:
+            ret, frame = self.cap.read()
+            with self.lock:
+                self.ret = ret
+                if ret:
+                    self.frame = frame
+            if not ret:
+                time.sleep(0.01)
+        # Safely release inside the thread to prevent access violation crashes
+        self.cap.release()
+
+    def read(self):
+        with self.lock:
+            if self.frame is not None:
+                return self.ret, self.frame.copy()
+            return self.ret, None
+            
+    def isOpened(self):
+        return self.cap.isOpened()
+
+    def release(self):
+        self.running = False
+        # Do not call cap.release() here, as cap.read() might still be blocking 
+        # in the background thread. Let the thread release it when it safely exits.
+        if hasattr(self, 'thread'):
+            self.thread.join(timeout=2.0)
 
 async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
     """
     Async generator that captures frames from a camera/RTSP source
     and yields them as multipart JPEG chunks (MJPEG protocol).
     """
-    cap = cv2.VideoCapture(source)
+    cap = CameraReader(source)
 
     if not cap.isOpened():
         raise HTTPException(
@@ -104,9 +141,11 @@ async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
     failed_reads = 0
 
     try:
+        loop = asyncio.get_event_loop()
         while True:
+            # Non-blocking read from our background reader
             ret, frame = cap.read()
-            if not ret:
+            if not ret or frame is None:
                 failed_reads += 1
                 if failed_reads > 50:
                     # Too many failures, yield a blank black frame with text
@@ -116,7 +155,7 @@ async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
                     yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg_buf.tobytes() + b"\r\n")
                     await asyncio.sleep(2)
                     cap.release()
-                    cap = cv2.VideoCapture(source)
+                    cap = CameraReader(source)
                     failed_reads = 0
                 else:
                     await asyncio.sleep(0.1)
@@ -128,7 +167,6 @@ async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
             # Run AI without blocking the camera read loop
             if frame_idx % 5 == 1 and not is_processing["status"]:
                 is_processing["status"] = True
-                loop = asyncio.get_event_loop()
                 
                 def _background_ai(f):
                     try:
@@ -159,9 +197,8 @@ async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
             annotated = draw_annotations(frame.copy(), current_results)
 
             # Encode frame to JPEG
-            _, jpeg_buf = cv2.imencode(
-                ".jpg", annotated,
-                [cv2.IMWRITE_JPEG_QUALITY, 70]
+            _, jpeg_buf = await loop.run_in_executor(
+                None, lambda: cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 70])
             )
 
             # Yield MJPEG part
@@ -171,9 +208,8 @@ async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
                 + jpeg_buf.tobytes()
                 + b"\r\n"
             )
-
-            # Prevent CPU hogging (0.02s sleep = ~50 FPS max)
-            await asyncio.sleep(0.02)
+            # Sleep slightly to cap framerate and yield to other async tasks
+            await asyncio.sleep(0.01)
 
     finally:
         cap.release()

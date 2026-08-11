@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { playAlertSound } from '../utils/audio';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -30,25 +31,7 @@ export default function Upload() {
       if (res.data.unknown_detections > 0) {
         toast.error(`Analysis complete: ${res.data.unknown_detections} unknown persons detected!`);
         // Play alert sound
-        try {
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const oscillator = audioCtx.createOscillator();
-          const gainNode = audioCtx.createGain();
-          
-          oscillator.type = 'square';
-          oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
-          
-          gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
-          gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-          
-          oscillator.connect(gainNode);
-          gainNode.connect(audioCtx.destination);
-          
-          oscillator.start();
-          oscillator.stop(audioCtx.currentTime + 0.5);
-        } catch (e) {
-          console.error("Audio playback failed", e);
-        }
+        playAlertSound('upload');
       } else {
         toast.success("Analysis complete. No unknown persons detected.");
       }

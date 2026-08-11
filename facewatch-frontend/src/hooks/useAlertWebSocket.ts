@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import type { Alert } from '../store/useStore';
 import { toast } from 'sonner';
+import { playAlertSound } from '../utils/audio';
 
 export const useAlertWebSocket = () => {
   const { setWsStatus, addLiveAlert, incrementUnreviewed } = useStore();
@@ -34,25 +35,7 @@ export const useAlertWebSocket = () => {
             toast.error(`🚨 Unknown Person Detected on ${alert.camera_source}`);
             
             // Beep sound
-            try {
-              const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-              const oscillator = audioCtx.createOscillator();
-              const gainNode = audioCtx.createGain();
-              
-              oscillator.type = 'sine';
-              oscillator.frequency.setValueAtTime(440, audioCtx.currentTime); // 440 Hz
-              
-              gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime); // Low volume
-              gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2); // Short beep
-              
-              oscillator.connect(gainNode);
-              gainNode.connect(audioCtx.destination);
-              
-              oscillator.start();
-              oscillator.stop(audioCtx.currentTime + 0.2);
-            } catch (e) {
-              console.error("Audio playback failed", e);
-            }
+            playAlertSound('beep');
           }
         } catch (e) {
           console.error("Failed to parse websocket message", e);

@@ -10,6 +10,7 @@ Handles:
 import os
 import time
 import uuid
+import threading
 from io import BytesIO
 from typing import Optional
 
@@ -19,6 +20,9 @@ import numpy as np
 from PIL import Image
 
 from services.face_cache import FaceEncodingCache
+
+# Global lock to prevent dlib from crashing during concurrent access from different threads
+dlib_lock = threading.Lock()
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -38,23 +42,32 @@ def encode_image_bytes(image_bytes: bytes) -> list[float]:
 
     if img_bgr is None:
         raise ValueError("Cannot decode image. Unsupported format.")
+        
+    # Downscale very large images to prevent dlib Out-Of-Memory / Segfault crashes
+    h, w = img_bgr.shape[:2]
+    max_dim = 1000
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        img_bgr = cv2.resize(img_bgr, (0, 0), fx=scale, fy=scale)
 
     # face_recognition expects RGB
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-    # Detect face locations first
-    face_locations = face_recognition.face_locations(img_rgb, model="hog")
+    with dlib_lock:
+        # Detect face locations first
+        face_locations = face_recognition.face_locations(img_rgb, model="hog")
 
-    if len(face_locations) == 0:
-        raise ValueError("No face detected in the uploaded image.")
-    if len(face_locations) > 1:
-        raise ValueError(
-            f"Multiple faces detected ({len(face_locations)}). "
-            "Please upload a photo with exactly one face."
-        )
+        if len(face_locations) == 0:
+            raise ValueError("No face detected in the uploaded image.")
+        if len(face_locations) > 1:
+            raise ValueError(
+                f"Multiple faces detected ({len(face_locations)}). "
+                "Please upload a photo with exactly one face."
+            )
 
-    # Compute 128D encoding
-    encodings = face_recognition.face_encodings(img_rgb, face_locations)
+        # Compute 128D encoding
+        encodings = face_recognition.face_encodings(img_rgb, face_locations)
+        
     return encodings[0].tolist()  # Convert numpy → plain Python list for JSON/DB
 
 
@@ -84,12 +97,13 @@ def recognize_faces_in_frame(frame_bgr: np.ndarray) -> list[dict]:
     rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
     # Detect faces
-    face_locations = face_recognition.face_locations(rgb_small, model="hog")
-    if not face_locations:
-        return []
+    with dlib_lock:
+        face_locations = face_recognition.face_locations(rgb_small, model="hog")
+        if not face_locations:
+            return []
 
-    # Compute encodings for all faces found
-    live_encodings = face_recognition.face_encodings(rgb_small, face_locations)
+        # Compute encodings for all faces found
+        live_encodings = face_recognition.face_encodings(rgb_small, face_locations)
 
     results = []
     for live_enc, location in zip(live_encodings, face_locations):
