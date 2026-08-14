@@ -83,4 +83,5 @@ async def health():
     return {
         "status": "ok",
         "known_faces_loaded": len(FaceEncodingCache.encodings),
+        "version": "simulated_feed_v1.0",
     }
