@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { playAlertSound } from '../utils/audio';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_URL } from '../utils/config';
 
 export default function Upload() {
   const [file, setFile] = useState<File | null>(null);

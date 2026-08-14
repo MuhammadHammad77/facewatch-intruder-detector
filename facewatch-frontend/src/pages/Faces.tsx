@@ -2,8 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { toast } from 'sonner';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_URL } from '../utils/config';
 
 interface Face {
   id: string;

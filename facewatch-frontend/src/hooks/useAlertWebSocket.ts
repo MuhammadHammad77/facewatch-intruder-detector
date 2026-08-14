@@ -3,6 +3,7 @@ import { useStore } from '../store/useStore';
 import type { Alert } from '../store/useStore';
 import { toast } from 'sonner';
 import { playAlertSound } from '../utils/audio';
+import { getWsUrl } from '../utils/config';
 
 export const useAlertWebSocket = () => {
   const { setWsStatus, addLiveAlert, incrementUnreviewed } = useStore();
@@ -16,7 +17,7 @@ export const useAlertWebSocket = () => {
     const connect = () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
       
-      const wsUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace('http', 'ws') + '/api/alerts/ws';
+      const wsUrl = getWsUrl();
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

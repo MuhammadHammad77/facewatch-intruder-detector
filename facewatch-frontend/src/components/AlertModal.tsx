@@ -1,7 +1,6 @@
 import { useStore } from '../store/useStore';
 import { formatDistanceToNow } from 'date-fns';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_URL } from '../utils/config';
 
 export const AlertModal = () => {
   const { selectedAlertModal, setSelectedAlertModal } = useStore();

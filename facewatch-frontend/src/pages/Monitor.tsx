@@ -3,8 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { useStore } from '../store/useStore';
 import { formatDistanceToNow } from 'date-fns';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_URL } from '../utils/config';
 
 export default function Monitor() {
   const { liveAlerts, selectedCameraSource, setSelectedSource, unreviewedCount, setSelectedAlertModal } = useStore();
