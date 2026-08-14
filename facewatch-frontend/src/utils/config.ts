@@ -2,6 +2,8 @@ const isLocal = window.location.hostname === 'localhost' || window.location.host
 
 export const API_URL = isLocal ? 'http://localhost:8000' : '';
 
+export const BACKEND_URL = isLocal ? 'http://localhost:8000' : 'https://facewatch-intruder-detector-production.up.railway.app';
+
 export const getWsUrl = () => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = isLocal ? 'localhost:8000' : 'facewatch-intruder-detector-production.up.railway.app';

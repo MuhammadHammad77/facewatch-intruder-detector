@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { useStore } from '../store/useStore';
 import { formatDistanceToNow } from 'date-fns';
-import { API_URL } from '../utils/config';
+import { API_URL, BACKEND_URL } from '../utils/config';
 
 export default function Monitor() {
   const { liveAlerts, selectedCameraSource, setSelectedSource, unreviewedCount, setSelectedAlertModal } = useStore();
@@ -84,7 +84,7 @@ export default function Monitor() {
           <div className="flex-1 bg-black rounded-lg overflow-hidden border border-border relative flex items-center justify-center min-h-[300px]">
             <img 
               key={selectedCameraSource}
-              src={`${API_URL}/api/stream/feed/${encodeURIComponent(selectedCameraSource)}`}
+              src={`${BACKEND_URL}/api/stream/feed/${encodeURIComponent(selectedCameraSource)}`}
               alt="Live Feed"
               className="w-full h-full object-contain"
               onError={(e) => {

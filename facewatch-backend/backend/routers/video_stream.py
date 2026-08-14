@@ -128,10 +128,20 @@ async def _mjpeg_generator(source: str | int) -> AsyncGenerator[bytes, None]:
     cap = CameraReader(source)
 
     if not cap.isOpened():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Cannot open video source: {source}",
-        )
+        # Yield a placeholder frame instead of raising HTTPException, which breaks the connection.
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(blank, f"Source Offline: {source}", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(blank, "Run backend locally for webcam [0]", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        cv2.putText(blank, "or configure remote RTSP source.", (50, 290), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        _, jpeg_buf = cv2.imencode(".jpg", blank, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        frame_bytes = (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg_buf.tobytes() + b"\r\n")
+        try:
+            while True:
+                yield frame_bytes
+                await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            pass
+        return
 
     source_key = str(source)
     frame_idx = 0
