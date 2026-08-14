@@ -81,16 +81,25 @@ import threading
 
 class CameraReader:
     def __init__(self, source):
+        self.source = source
         self.cap = cv2.VideoCapture(source)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.frame = None
         self.ret = False
         self.running = True
         self.lock = threading.Lock()
+        self.simulated = False
         
         if self.cap.isOpened():
             self.thread = threading.Thread(target=self._update, daemon=True)
             self.thread.start()
+        else:
+            # Fallback for webcam source 0 in cloud environments
+            if source == 0 or str(source).isdigit():
+                print("Webcam physical capture device not found. Starting simulated CCTV stream...")
+                self.simulated = True
+                self.thread = threading.Thread(target=self._update_simulated, daemon=True)
+                self.thread.start()
 
     def _update(self):
         while self.running:
@@ -101,8 +110,73 @@ class CameraReader:
                     self.frame = frame
             if not ret:
                 time.sleep(0.01)
-        # Safely release inside the thread to prevent access violation crashes
         self.cap.release()
+
+    def _update_simulated(self):
+        from datetime import datetime
+        face_images = []
+        img_paths = ["images/majid.jpeg", "images/hammad.jpeg"]
+        for p in img_paths:
+            if os.path.exists(p):
+                img = cv2.imread(p)
+                if img is not None:
+                    img = cv2.resize(img, (160, 160))
+                    face_images.append(img)
+
+        # If no face images are found, generate a mock human-like face structure for CV2
+        if not face_images:
+            dummy = np.zeros((160, 160, 3), dtype=np.uint8)
+            cv2.circle(dummy, (80, 80), 60, (200, 200, 200), -1)  # Face
+            cv2.circle(dummy, (55, 65), 8, (50, 50, 50), -1)     # Left Eye
+            cv2.circle(dummy, (105, 65), 8, (50, 50, 50), -1)    # Right Eye
+            cv2.ellipse(dummy, (80, 105), (25, 15), 0, 0, 180, (50, 50, 50), 3) # Mouth
+            face_images.append(dummy)
+
+        width, height = 640, 480
+        x, y = 100, 120
+        dx, dy = 5, 4
+        face_idx = 0
+        last_face_change = time.time()
+
+        while self.running:
+            # CCTV grid overlay background
+            frame = np.zeros((height, width, 3), dtype=np.uint8)
+            
+            # Subtle grid lines
+            for i in range(0, width, 80):
+                cv2.line(frame, (i, 0), (i, height), (22, 22, 22), 1)
+            for j in range(0, height, 80):
+                cv2.line(frame, (0, j), (width, j), (22, 22, 22), 1)
+                
+            # Header info
+            cv2.putText(frame, "CCTV FEED - SIMULATED WEBCAM (DEMO)", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cv2.putText(frame, f"REC: {now_str}", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+            cv2.putText(frame, f"CAM: {self.source} | CLOUD HOST", (15, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+            
+            # Bouncing movement
+            x += dx
+            y += dy
+            if x <= 15 or x >= width - 175:
+                dx = -dx
+            if y <= 90 or y >= height - 175:
+                dy = -dy
+                
+            # Place the face on the grid frame
+            current_face = face_images[face_idx]
+            fh, fw, _ = current_face.shape
+            frame[y:y+fh, x:x+fw] = current_face
+            
+            # Swap face image every 8 seconds
+            if time.time() - last_face_change > 8.0:
+                face_idx = (face_idx + 1) % len(face_images)
+                last_face_change = time.time()
+
+            with self.lock:
+                self.ret = True
+                self.frame = frame
+                
+            time.sleep(0.04)
 
     def read(self):
         with self.lock:
@@ -111,12 +185,10 @@ class CameraReader:
             return self.ret, None
             
     def isOpened(self):
-        return self.cap.isOpened()
+        return self.simulated or self.cap.isOpened()
 
     def release(self):
         self.running = False
-        # Do not call cap.release() here, as cap.read() might still be blocking 
-        # in the background thread. Let the thread release it when it safely exits.
         if hasattr(self, 'thread'):
             self.thread.join(timeout=2.0)
 
