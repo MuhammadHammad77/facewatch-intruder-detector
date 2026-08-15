@@ -1,5 +1,17 @@
 {
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
+    }
+  ],
   "rewrites": [
+    {
+      "source": "/api/stream/:path*",
+      "destination": "https://facewatch-intruder-detector-production.up.railway.app/api/stream/:path*"
+    },
     {
       "source": "/api/:path*",
       "destination": "https://facewatch-intruder-detector-production.up.railway.app/api/:path*"

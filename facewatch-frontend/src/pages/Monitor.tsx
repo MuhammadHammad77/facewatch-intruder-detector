@@ -43,6 +43,23 @@ export default function Monitor() {
     }
   });
 
+  const clearHistoryMutation = useMutation({
+    mutationFn: async () => {
+      await axios.delete(`${API_URL}/api/alerts`);
+    },
+    onSuccess: () => {
+      useStore.getState().setLiveAlerts([]);
+      useStore.getState().setUnreviewedCount(0);
+      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+    }
+  });
+
+  const handleClearHistory = () => {
+    if (window.confirm('Are you sure you want to delete all alert history? This cannot be undone.')) {
+      clearHistoryMutation.mutate();
+    }
+  };
+
   return (
     <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-8rem)]">
       {/* Left Panel - Camera Feed */}
@@ -114,8 +131,12 @@ export default function Monitor() {
                 </span>
               )}
             </h2>
-            <button className="text-xs text-accent-blue hover:underline">
-              History
+            <button 
+              onClick={handleClearHistory}
+              disabled={clearHistoryMutation.isPending || liveAlerts.length === 0}
+              className="text-xs text-accent-red hover:bg-accent-red/10 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed border border-accent-red/30 hover:border-accent-red/60 font-medium"
+            >
+              {clearHistoryMutation.isPending ? 'Clearing...' : '🗑️ Clear History'}
             </button>
           </div>
 

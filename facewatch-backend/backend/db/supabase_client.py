@@ -96,6 +96,16 @@ def mark_alert_reviewed(alert_id: str) -> bool:
     conn.close()
     return True
 
+def delete_all_alerts() -> int:
+    """Delete all alerts and return the count of deleted rows."""
+    conn = get_db()
+    cursor = conn.execute("SELECT COUNT(*) FROM alerts")
+    count = cursor.fetchone()[0]
+    conn.execute("DELETE FROM alerts")
+    conn.commit()
+    conn.close()
+    return count
+
 class StorageStorage:
     def upload(self, path, file, file_options):
         with open(os.path.join(STORAGE_DIR, path), 'wb') as f:

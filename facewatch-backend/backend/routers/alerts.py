@@ -11,7 +11,7 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
-from db.supabase_client import fetch_alerts, mark_alert_reviewed
+from db.supabase_client import fetch_alerts, mark_alert_reviewed, delete_all_alerts
 from models.schemas import AlertItem, AlertMarkReviewedResponse
 from services.alert_broadcaster import get_manager
 
@@ -80,3 +80,13 @@ async def review_alert(alert_id: str):
         id=alert_id,
         message="Alert marked as reviewed.",
     )
+
+
+# ─── DELETE /api/alerts ─────────────────────────────────────────────────────
+
+@router.delete("")
+async def clear_all_alerts():
+    """Delete all alert history."""
+    loop = asyncio.get_event_loop()
+    count = await loop.run_in_executor(None, delete_all_alerts)
+    return {"message": f"Deleted {count} alerts.", "deleted_count": count}
